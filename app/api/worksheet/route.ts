@@ -423,10 +423,7 @@ async function createWorksheetPdf(data: WorksheetRequest) {
     );
     drawCenteredText(
       page,
-      row.amount !== null &&
-        !(index === 0 && data.fulfillment === 'Ground' && row.amount === 0)
-        ? currency(row.amount)
-        : '',
+      row.amount !== null && row.amount > 0 ? currency(row.amount) : '',
       detailX + detailColumns[0],
       rowY,
       detailColumns[1],
