@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 
 type CostKey =
   | 'base'
@@ -181,19 +182,18 @@ function WorksheetPreview({
             <div
               key={row.key}
               className="grid grid-cols-[35.4%_29.9%_34.7%]"
-              style={{ height: index === 0 ? '2.82cqh' : '2.28cqh' }}
+              style={{ minHeight: index === 0 ? '2.82cqh' : '2.28cqh' }}
             >
               <div className="flex items-center justify-center border-b-[0.1cqw] border-r-[0.1cqw] border-black px-[0.5cqw] text-center">
                 {row.label}
               </div>
               <div className="flex items-center justify-center border-b-[0.1cqw] border-r-[0.1cqw] border-black">
-                {amounts[row.key] !== '' &&
-                !(row.key === 'base' && fulfillment === 'Ground' && value === 0)
-                  ? formatCurrency(value)
-                  : ''}
+                {value > 0 ? formatCurrency(value) : ''}
               </div>
-              <div className="flex min-w-0 items-center border-b-[0.1cqw] border-r-[0.1cqw] border-black px-[0.8cqw]">
-                <span className="truncate">{comments[row.key]}</span>
+              <div className="flex min-w-0 items-center border-b-[0.1cqw] border-r-[0.1cqw] border-black px-[0.8cqw] py-[0.45cqw]">
+                <span className="w-full break-words text-left leading-[1.15]">
+                  {comments[row.key]}
+                </span>
               </div>
             </div>
           );
@@ -266,7 +266,10 @@ export function CostWorksheet({ seed, onBack }: CostWorksheetProps) {
   };
 
   const updateComment = (key: CostKey, value: string) => {
-    setComments((current) => ({ ...current, [key]: value.slice(0, 60) }));
+    setComments((current) => ({
+      ...current,
+      [key]: value.replace(/\s+/g, ' ').slice(0, 240),
+    }));
   };
 
   const downloadPdf = async () => {
@@ -479,13 +482,14 @@ export function CostWorksheet({ seed, onBack }: CostWorksheetProps) {
                           placeholder="0.00"
                         />
                       </div>
-                      <Input
+                      <Textarea
                         aria-label={`${row.label} comments`}
                         value={comments[row.key]}
+                        maxLength={240}
                         onChange={(event) =>
                           updateComment(row.key, event.target.value)
                         }
-                        className="h-10 bg-white"
+                        className="min-h-10 resize-y bg-white"
                         placeholder="Comments"
                       />
                     </div>
