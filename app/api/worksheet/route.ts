@@ -68,7 +68,7 @@ function parseRequest(body: unknown): WorksheetRequest | null {
     return {
       label: cleanText(item.label, 45),
       amount: cleanAmount(item.amount),
-      comment: cleanText(item.comment, 60),
+      comment: cleanText(item.comment, 240),
     };
   });
 
@@ -148,6 +148,68 @@ function drawLeftText(
     font,
     color: BLACK,
   });
+}
+
+function wrapText(text: string, font: PDFFont, size: number, maxWidth: number) {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = '';
+
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
+      line = candidate;
+      continue;
+    }
+
+    if (line) {
+      lines.push(line);
+      line = '';
+    }
+
+    let chunk = '';
+    for (const character of word) {
+      const nextChunk = `${chunk}${character}`;
+      if (chunk && font.widthOfTextAtSize(nextChunk, size) > maxWidth) {
+        lines.push(chunk);
+        chunk = character;
+      } else {
+        chunk = nextChunk;
+      }
+    }
+    line = chunk;
+  }
+
+  if (line) lines.push(line);
+  return lines;
+}
+
+function drawWrappedLeftText(
+  page: PDFPage,
+  lines: string[],
+  x: number,
+  y: number,
+  height: number,
+  font: PDFFont,
+  size: number,
+  padding = 5,
+) {
+  if (lines.length === 0) return;
+
+  const lineHeight = size + 2;
+  const textHeight = lines.length * lineHeight;
+  let baseline = y + (height + textHeight) / 2 - size;
+
+  for (const line of lines) {
+    page.drawText(line, {
+      x: x + padding,
+      y: baseline,
+      size,
+      font,
+      color: BLACK,
+    });
+    baseline -= lineHeight;
+  }
 }
 
 function drawGrid(
@@ -372,100 +434,199 @@ async function createWorksheetPdf(data: WorksheetRequest) {
     );
   }
 
-  const costY = 253;
-  const costRows = [24.2, 22.3, 18, 18, 17.5, 18.5, 18.5, 22.6];
-  const costHeight = costRows.reduce((sum, value) => sum + value, 0);
-  page.drawRectangle({
-    x: detailX,
-    y: costY + costHeight - costRows[0],
-    width: detailWidth,
-    height: costRows[0],
-    color: GRAY,
-  });
-  page.drawRectangle({
-    x: detailX,
-    y: costY,
-    width: detailWidth,
-    height: costRows[costRows.length - 1],
-    color: GRAY,
-  });
-  drawGrid(page, detailX, costY, detailColumns, costRows);
-
-  let currentTop = costY + costHeight;
-  const headers = ['Cost Type', 'Cost $', 'Comments'];
-  headers.forEach((header, index) => {
-    drawCenteredText(
-      page,
-      header,
-      detailX +
-        detailColumns.slice(0, index).reduce((sum, value) => sum + value, 0),
-      currentTop - costRows[0],
-      detailColumns[index],
-      costRows[0],
-      contentBold,
-      12,
-    );
-  });
-  currentTop -= costRows[0];
-
-  data.rows.forEach((row, index) => {
-    const height = costRows[index + 1];
-    const rowY = currentTop - height;
-    drawCenteredText(
-      page,
-      row.label,
-      detailX,
-      rowY,
-      detailColumns[0],
-      height,
-      regular,
-      12,
-    );
-    drawCenteredText(
-      page,
-      row.amount !== null && row.amount > 0 ? currency(row.amount) : '',
-      detailX + detailColumns[0],
-      rowY,
-      detailColumns[1],
-      height,
-      regular,
-      12,
-    );
-    drawLeftText(
-      page,
-      row.comment,
-      detailX + detailColumns[0] + detailColumns[1],
-      rowY,
-      detailColumns[2],
-      height,
-      regular,
-      12,
-    );
-    currentTop = rowY;
-  });
-
+  const baseCostRows = [22.3, 18, 18, 17.5, 18.5, 18.5];
+  const commentLines = data.rows.map((row) =>
+    wrapText(row.comment, regular, 12, detailColumns[2] - 10),
+  );
   const total = data.rows.reduce((sum, row) => sum + (row.amount ?? 0), 0);
-  const totalHeight = costRows[costRows.length - 1];
-  drawCenteredText(
-    page,
-    'Total Cost',
-    detailX,
-    costY,
-    detailColumns[0],
-    totalHeight,
-    contentBold,
-    12,
-  );
-  drawCenteredText(
-    page,
-    currency(total),
-    detailX + detailColumns[0],
-    costY,
-    detailColumns[1],
-    totalHeight,
-    regular,
-    12,
-  );
+  const bodyRows = data.rows.map((row, index) => ({
+    row,
+    lines: commentLines[index],
+    height: Math.max(baseCostRows[index], commentLines[index].length * 14 + 8),
+  }));
+
+  const drawCostTable = (
+    targetPage: PDFPage,
+    rows: typeof bodyRows,
+    tableTop: number,
+    includeTotal: boolean,
+  ) => {
+    const headerHeight = 24.2;
+    const totalHeight = 22.6;
+    const rowHeights = [
+      headerHeight,
+      ...rows.map((item) => item.height),
+      ...(includeTotal ? [totalHeight] : []),
+    ];
+    const tableHeight = rowHeights.reduce((sum, value) => sum + value, 0);
+    const tableY = tableTop - tableHeight;
+
+    targetPage.drawRectangle({
+      x: detailX,
+      y: tableTop - headerHeight,
+      width: detailWidth,
+      height: headerHeight,
+      color: GRAY,
+    });
+    if (includeTotal) {
+      targetPage.drawRectangle({
+        x: detailX,
+        y: tableY,
+        width: detailWidth,
+        height: totalHeight,
+        color: GRAY,
+      });
+    }
+    drawGrid(targetPage, detailX, tableY, detailColumns, rowHeights);
+
+    const headers = ['Cost Type', 'Cost $', 'Comments'];
+    headers.forEach((header, index) => {
+      drawCenteredText(
+        targetPage,
+        header,
+        detailX +
+          detailColumns.slice(0, index).reduce((sum, value) => sum + value, 0),
+        tableTop - headerHeight,
+        detailColumns[index],
+        headerHeight,
+        contentBold,
+        12,
+      );
+    });
+
+    let currentTop = tableTop - headerHeight;
+    for (const item of rows) {
+      const rowY = currentTop - item.height;
+      drawCenteredText(
+        targetPage,
+        item.row.label,
+        detailX,
+        rowY,
+        detailColumns[0],
+        item.height,
+        regular,
+        12,
+      );
+      drawCenteredText(
+        targetPage,
+        item.row.amount !== null && item.row.amount > 0
+          ? currency(item.row.amount)
+          : '',
+        detailX + detailColumns[0],
+        rowY,
+        detailColumns[1],
+        item.height,
+        regular,
+        12,
+      );
+      drawWrappedLeftText(
+        targetPage,
+        item.lines,
+        detailX + detailColumns[0] + detailColumns[1],
+        rowY,
+        item.height,
+        regular,
+        12,
+      );
+      currentTop = rowY;
+    }
+
+    if (includeTotal) {
+      drawCenteredText(
+        targetPage,
+        'Total Cost',
+        detailX,
+        tableY,
+        detailColumns[0],
+        totalHeight,
+        contentBold,
+        12,
+      );
+      drawCenteredText(
+        targetPage,
+        currency(total),
+        detailX + detailColumns[0],
+        tableY,
+        detailColumns[1],
+        totalHeight,
+        regular,
+        12,
+      );
+    }
+  };
+
+  const drawContinuationHeader = (targetPage: PDFPage) => {
+    const continuationTitle = 'DTNP - COST WORKSHEET';
+    const continuationTitleWidth = bold.widthOfTextAtSize(
+      continuationTitle,
+      titleSize,
+    );
+    const continuationTitleX = (612 - continuationTitleWidth) / 2;
+    targetPage.drawText(continuationTitle, {
+      x: continuationTitleX,
+      y: 716,
+      size: titleSize,
+      font: bold,
+    });
+    targetPage.drawLine({
+      start: { x: continuationTitleX, y: 713.5 },
+      end: { x: continuationTitleX + continuationTitleWidth, y: 713.5 },
+      thickness: 1.2,
+      color: BLACK,
+    });
+    drawLeftText(
+      targetPage,
+      `Order Number: ${data.orderNumber}`,
+      detailX,
+      672,
+      detailWidth,
+      22,
+      regular,
+      12,
+    );
+    targetPage.drawText('Search Cost Details - Continued', {
+      x: 72,
+      y: 644,
+      size: 16,
+      font: bold,
+      color: BLUE,
+    });
+  };
+
+  let rowIndex = 0;
+  let targetPage = page;
+  let tableTop = 413.1;
+  let availableHeight = tableTop - 48;
+
+  while (rowIndex < bodyRows.length) {
+    const pageRows: typeof bodyRows = [];
+    let usedHeight = 24.2;
+
+    while (rowIndex < bodyRows.length) {
+      const item = bodyRows[rowIndex];
+      const isFinalRow = rowIndex === bodyRows.length - 1;
+      const requiredHeight = item.height + (isFinalRow ? 22.6 : 0);
+      if (
+        pageRows.length > 0 &&
+        usedHeight + requiredHeight > availableHeight
+      ) {
+        break;
+      }
+      pageRows.push(item);
+      usedHeight += item.height;
+      rowIndex += 1;
+    }
+
+    const includeTotal = rowIndex === bodyRows.length;
+    drawCostTable(targetPage, pageRows, tableTop, includeTotal);
+
+    if (!includeTotal) {
+      targetPage = document.addPage([612, 792]);
+      drawContinuationHeader(targetPage);
+      tableTop = 614;
+      availableHeight = tableTop - 48;
+    }
+  }
 
   return { bytes: await document.save(), family };
 }
